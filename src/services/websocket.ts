@@ -4,14 +4,16 @@ import apiClient from './apiClient';
 
 export const getWebSocketUrl = (): string => {
   const envUrl = (import.meta as any).env?.VITE_API_URL;
-  const apiUrl = (envUrl && typeof envUrl === 'string' && envUrl.trim().length > 0)
-    ? (envUrl.endsWith('/') ? envUrl.slice(0, -1) : envUrl)
-    : 'http://localhost:5001/api';
-  // Replace the REST API base path /api
-  let wsUrl = apiUrl.replace(/\/api$/, '');
-  // Switch protocol: http -> ws, https -> wss
-  wsUrl = wsUrl.replace(/^http/, 'ws');
-  return wsUrl;
+  if (envUrl && typeof envUrl === 'string' && envUrl.trim().length > 0) {
+    let wsUrl = envUrl.endsWith('/') ? envUrl.slice(0, -1) : envUrl;
+    wsUrl = wsUrl.replace(/\/api$/, '');
+    return wsUrl.replace(/^http/, 'ws');
+  }
+  // If in production browser, connect to Render WSS endpoint
+  if (typeof window !== 'undefined' && !['localhost', '127.0.0.1'].includes(window.location.hostname)) {
+    return 'wss://fleetos-backend-6y8c.onrender.com';
+  }
+  return 'ws://localhost:5001';
 };
 
 export interface TelemetryPayload {

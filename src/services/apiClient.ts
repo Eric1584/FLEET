@@ -6,6 +6,10 @@ const getBaseURL = (): string => {
   if (envUrl && typeof envUrl === 'string' && envUrl.trim().length > 0) {
     return envUrl.endsWith('/') ? envUrl.slice(0, -1) : envUrl;
   }
+  // If running in production browser on Vercel/Render, use relative /api (proxied by Vercel)
+  if (typeof window !== 'undefined' && !['localhost', '127.0.0.1'].includes(window.location.hostname)) {
+    return '/api';
+  }
   return 'http://localhost:5001/api';
 };
 
