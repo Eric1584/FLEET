@@ -44,12 +44,14 @@ app.use(cors({
       return callback(null, true);
     }
     
-    return callback(new Error(`Not allowed by CORS: ${origin}`));
+    // Reject unknown origin safely without throwing 500 error
+    return callback(null, false);
   },
-  methods: ['GET', 'POST', 'PUT', 'DELETE'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'],
   credentials: true
 }));
+app.options('*', cors());
 app.use(express.json());
 
 // Auto-seed is opt-out in development, opt-in everywhere else — set SEED_DB=true/false to override.
@@ -104,7 +106,17 @@ app.use('/api', serviceLogRoutes);
 app.use('/api/employee-accounts', employeeAccountRoutes);
 app.use('/api/transport-requests', transportRequestRoutes);
 
-// Base Health Check path
+// Base Root & Health Check paths
+app.get('/', (req, res) => {
+  res.json({
+    status: 'online',
+    message: 'FleetOS Enterprise Dispatch Server API is live and running.',
+    health: '/health',
+    version: '1.0.0',
+    timestamp: new Date()
+  });
+});
+
 app.get('/health', (req, res) => {
   res.json({ 
     status: 'healthy', 

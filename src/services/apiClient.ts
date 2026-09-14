@@ -1,12 +1,25 @@
 import axios from 'axios';
 import { useAuthStore } from '../store/useAuthStore';
 
+const getBaseURL = (): string => {
+  const envUrl = (import.meta as any).env?.VITE_API_URL;
+  if (envUrl && typeof envUrl === 'string' && envUrl.trim().length > 0) {
+    return envUrl.endsWith('/') ? envUrl.slice(0, -1) : envUrl;
+  }
+  return 'http://localhost:5001/api';
+};
+
+const activeBaseURL = getBaseURL();
+if (typeof window !== 'undefined') {
+  console.info(`📡 [FleetOS] Active API Base URL: ${activeBaseURL}`);
+}
+
 const apiClient = axios.create({
-  baseURL: (import.meta as any).env.VITE_API_URL || 'http://localhost:5001/api',
+  baseURL: activeBaseURL,
   headers: {
     'Content-Type': 'application/json',
   },
-  timeout: 15000, // 15 seconds timeout
+  timeout: 60000, // 60s timeout to accommodate Render free-tier spin-up delays
 });
 
 // Request Interceptor: Attach dynamic authorization JWT headers
@@ -40,11 +53,25 @@ apiClient.interceptors.response.use(
       window.location.href = '/login';
     }
 
+    // Identify common deployment/network issues for clearer error feedback
+    let userFriendlyMessage = error.response?.data?.message || error.message || 'An unexpected network error occurred';
+    
+    if (error.code === 'ECONNABORTED' || error.message?.includes('timeout')) {
+      userFriendlyMessage = 'Server request timed out. The backend server might be starting up (Render cold-start), please retry in a few seconds.';
+    } else if (error.code === 'ERR_NETWORK' || !error.response) {
+      const currentBaseUrl = apiClient.defaults.baseURL || '';
+      if (currentBaseUrl.includes('localhost') && typeof window !== 'undefined' && !['localhost', '127.0.0.1'].includes(window.location.hostname)) {
+        userFriendlyMessage = 'Cannot reach API at localhost. Please configure VITE_API_URL in your Vercel Environment Variables to point to your Render backend.';
+      } else {
+        userFriendlyMessage = 'Network error: Unable to connect to server. Check your internet connection or backend server status.';
+      }
+    }
+
     // Wrap common HTTP statuses in descriptive developer envelopes
     const customError = {
-      message: error.response?.data?.message || error.message || 'An unexpected network error occurred',
+      message: userFriendlyMessage,
       status: error.response?.status || 500,
-      code: error.response?.data?.code || 'UNKNOWN_ERROR',
+      code: error.response?.data?.code || error.code || 'UNKNOWN_ERROR',
       response: error.response,
       raw: error
     };

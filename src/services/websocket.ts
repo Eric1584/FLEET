@@ -1,8 +1,12 @@
 import { create } from 'zustand';
 import { useUIStore } from '../store/useUIStore';
+import apiClient from './apiClient';
 
 export const getWebSocketUrl = (): string => {
-  const apiUrl = (import.meta as any).env?.VITE_API_URL || 'http://localhost:5001/api';
+  const envUrl = (import.meta as any).env?.VITE_API_URL;
+  const apiUrl = (envUrl && typeof envUrl === 'string' && envUrl.trim().length > 0)
+    ? (envUrl.endsWith('/') ? envUrl.slice(0, -1) : envUrl)
+    : 'http://localhost:5001/api';
   // Replace the REST API base path /api
   let wsUrl = apiUrl.replace(/\/api$/, '');
   // Switch protocol: http -> ws, https -> wss
@@ -60,7 +64,7 @@ export class WebSocketClient {
   // Connects to WebSocket server. Defaults to mock simulation fallback if connection fails.
   connect(useSimulatorAsFallback = true) {
     this.isIntentionalDisconnect = false;
-    
+
     // Clear existing simulator if active
     if (this.simulatorTimer) {
       clearInterval(this.simulatorTimer);
@@ -99,7 +103,7 @@ export class WebSocketClient {
         useGPSStore.getState().setConnected(false);
         if (!this.isIntentionalDisconnect) {
           console.warn(`🔌 WebSocket stream terminated (code: ${event.code}). Reconnecting in ${this.reconnectInterval}ms...`);
-          
+
           if (useSimulatorAsFallback) {
             this.startMockSimulation();
           }
@@ -142,15 +146,14 @@ export class WebSocketClient {
   // Emulates dynamic GPS coordinate updates (useful for local development/showcases)
   private async startMockSimulation() {
     if (this.simulatorTimer) return;
-    
+
     console.log('🧪 Starting high-fidelity fleet telemetry simulation');
-    
+
     try {
       // Query the backend dynamically to fetch real vehicles
-      const response = await fetch('/api/vehicles');
-      if (!response.ok) throw new Error('Failed to fetch real vehicles');
-      const realVehicles = await response.json();
-      
+      const response = await apiClient.get('/vehicles');
+      const realVehicles = response.data || [];
+
       const vehicles = realVehicles.map((v: any) => ({
         id: v.id,
         lat: v.telemetry?.latitude || -1.2921,
@@ -180,57 +183,55 @@ export class WebSocketClient {
       this.simulatorTimer = setInterval(async () => {
         // Re-fetch vehicle statuses dynamically to keep UI transitions seamless
         try {
-          const freshResponse = await fetch('/api/vehicles');
-          if (freshResponse.ok) {
-            const freshList = await freshResponse.json();
-            freshList.forEach((freshV: any) => {
-              const localV = vehicles.find((v: any) => v.id === freshV.id);
-              if (localV) {
-                // Trigger one-time notification when status shifts in the database
-                if (localV.status !== freshV.status) {
-                  const statusMap: Record<string, { type: 'success' | 'warning' | 'info'; title: string; desc: string }> = {
-                    active: { type: 'success', title: 'Asset Departed', desc: `Vehicle ${freshV.plateNumber} is now active on a dispatch route.` },
-                    idle: { type: 'info', title: 'Asset Parked', desc: `Vehicle ${freshV.plateNumber} has arrived and is now idle.` },
-                    maintenance: { type: 'warning', title: 'Asset in Servicing', desc: `Vehicle ${freshV.plateNumber} has checked into preventative maintenance.` },
-                    offline: { type: 'warning', title: 'Asset Offline', desc: `Vehicle ${freshV.plateNumber} is no longer transmitting telemetry.` },
-                  };
-                  
-                  const transition = statusMap[freshV.status];
-                  if (transition) {
-                    useUIStore.getState().addNotification(transition.type, transition.title, transition.desc);
-                  }
-                }
+          const freshResponse = await apiClient.get('/vehicles');
+          const freshList = freshResponse.data || [];
+          freshList.forEach((freshV: any) => {
+            const localV = vehicles.find((v: any) => v.id === freshV.id);
+            if (localV) {
+              // Trigger one-time notification when status shifts in the database
+              if (localV.status !== freshV.status) {
+                const statusMap: Record<string, { type: 'success' | 'warning' | 'info'; title: string; desc: string }> = {
+                  active: { type: 'success', title: 'Asset Departed', desc: `Vehicle ${freshV.plateNumber} is now active on a dispatch route.` },
+                  idle: { type: 'info', title: 'Asset Parked', desc: `Vehicle ${freshV.plateNumber} has arrived and is now idle.` },
+                  maintenance: { type: 'warning', title: 'Asset in Servicing', desc: `Vehicle ${freshV.plateNumber} has checked into preventative maintenance.` },
+                  offline: { type: 'warning', title: 'Asset Offline', desc: `Vehicle ${freshV.plateNumber} is no longer transmitting telemetry.` },
+                };
 
-                localV.status = freshV.status;
-                if (freshV.status !== 'active') {
-                  localV.speed = 0;
-                } else if (localV.speed === 0) {
-                  localV.speed = 55; // start moving
+                const transition = statusMap[freshV.status];
+                if (transition) {
+                  useUIStore.getState().addNotification(transition.type, transition.title, transition.desc);
                 }
-                // Sync manual telemetry updates immediately if coordinates changed or locationName changed
-                if (freshV.telemetry) {
-                  localV.locationName = freshV.telemetry.locationName || localV.locationName;
-                  if (Math.abs(freshV.telemetry.latitude - localV.lat) > 0.01) {
-                    localV.lat = freshV.telemetry.latitude;
-                    localV.lng = freshV.telemetry.longitude;
-                  }
-                  localV.fuelLevel = freshV.telemetry.fuelLevel;
-                }
-              } else {
-                // Add new vehicle dynamically if enrolled
-                vehicles.push({
-                  id: freshV.id,
-                  lat: freshV.telemetry?.latitude || -1.2921,
-                  lng: freshV.telemetry?.longitude || 36.8219,
-                  speed: freshV.status === 'active' ? 55 : 0,
-                  heading: freshV.telemetry?.heading || 0,
-                  fuelLevel: freshV.telemetry?.fuelLevel || 85,
-                  status: freshV.status,
-                  locationName: freshV.telemetry?.locationName || 'Nairobi',
-                });
               }
-            });
-          }
+
+              localV.status = freshV.status;
+              if (freshV.status !== 'active') {
+                localV.speed = 0;
+              } else if (localV.speed === 0) {
+                localV.speed = 55; // start moving
+              }
+              // Sync manual telemetry updates immediately if coordinates changed or locationName changed
+              if (freshV.telemetry) {
+                localV.locationName = freshV.telemetry.locationName || localV.locationName;
+                if (Math.abs(freshV.telemetry.latitude - localV.lat) > 0.01) {
+                  localV.lat = freshV.telemetry.latitude;
+                  localV.lng = freshV.telemetry.longitude;
+                }
+                localV.fuelLevel = freshV.telemetry.fuelLevel;
+              }
+            } else {
+              // Add new vehicle dynamically if enrolled
+              vehicles.push({
+                id: freshV.id,
+                lat: freshV.telemetry?.latitude || -1.2921,
+                lng: freshV.telemetry?.longitude || 36.8219,
+                speed: freshV.status === 'active' ? 55 : 0,
+                heading: freshV.telemetry?.heading || 0,
+                fuelLevel: freshV.telemetry?.fuelLevel || 85,
+                status: freshV.status,
+                locationName: freshV.telemetry?.locationName || 'Nairobi',
+              });
+            }
+          });
         } catch (err) {
           console.warn('Simulator failed to pull fresh status sync, using local simulation state:', err);
         }
@@ -244,7 +245,7 @@ export class WebSocketClient {
             v.speed = Math.max(30, Math.min(75, v.speed + Math.floor((Math.random() - 0.5) * 10)));
             v.heading = (v.heading + Math.floor((Math.random() - 0.5) * 20) + 360) % 360;
             v.fuelLevel = Math.max(10, v.fuelLevel - (Math.random() * 0.3));
-            
+
             // Re-geofence simulated movements to display closest town
             const kenyanCitiesList = [
               { name: 'Nairobi', lat: -1.2921, lng: 36.8219 },
@@ -300,7 +301,7 @@ export class WebSocketClient {
           timestamp: new Date().toISOString(),
         });
       });
-      
+
       this.simulatorTimer = setInterval(() => {
         staticVehicles.forEach(v => {
           if (v.speed > 0) {
